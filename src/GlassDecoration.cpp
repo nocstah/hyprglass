@@ -8,8 +8,13 @@
 #include <algorithm>
 #include <GLES3/gl32.h>
 #include <hyprland/src/desktop/view/Window.hpp>
+#include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/rule/windowRule/WindowRuleApplicator.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
+#include <hyprland/src/helpers/Color.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #include <hyprutils/math/Misc.hpp>
@@ -150,7 +155,10 @@ SDecorationPositioningInfo CGlassDecoration::getPositioningInfo() {
     SDecorationPositioningInfo info;
     info.priority       = 10000;
     info.policy         = DECORATION_POSITION_ABSOLUTE;
-    info.desiredExtents = {{0, 0}, {0, 0}};
+    // The overlap shadow reaches this far outside the window; reporting it
+    // makes Hyprland's own window damage (focus changes, moves) include it.
+    const double r      = overlapShadowRange();
+    info.desiredExtents = {{r, r}, {r, r}};
     return info;
 }
 
@@ -162,18 +170,31 @@ void CGlassDecoration::draw(PHLMONITOR monitor, float const& alpha) {
 
     const bool enabled = resolveEnabled();
     updateNoBlurProp(enabled);
+
     // X-ray: ask for next frame's pre-window snapshot while we still sample it.
-    if (monitor && resolveXray()) {
+    if (enabled && monitor && resolveXray()) {
         auto& snapshot          = g_pGlobalState->backgroundSnapshots[monitor->m_id];
         snapshot.requestedFrame = snapshot.frame;
     }
+
+    // Overlap shadow is independent of the glass: an unfocused window that
+    // covers another one gets it whether or not it is glassed.
+    std::vector<CBox> beneath;
+    const bool        shadow = overlapShadowRange() > 0 && resolveOverlapShadow(monitor, &beneath);
+    {
+        std::vector<std::array<int, 4>> rects;
+        for (const auto& b : beneath)
+            rects.push_back({static_cast<int>(b.x), static_cast<int>(b.y), static_cast<int>(b.w), static_cast<int>(b.h)});
+        if (shadow != m_lastShadow || rects != m_lastShadowClip) {
+            m_lastShadow     = shadow;
+            m_lastShadowClip = std::move(rects);
+            damageEntire();
+        }
+    }
+    if (!enabled && !shadow)
         return;
 
-    // X-ray: ask for next frame's pre-window snapshot while we still sample it.
-    if (monitor && resolveXray())
-        g_pGlobalState->backgroundSnapshots[monitor->m_id].requested = true;
-
-    CGlassPassElement::SGlassPassData data{m_self, alpha};
+    CGlassPassElement::SGlassPassData data{m_self, alpha, enabled, shadow, shadow ? beneath : std::vector<CBox>{}};
     g_pHyprRenderer->m_renderPass.add(makeUnique<CGlassPassElement>(data));
 
     const auto window = m_window.lock();
@@ -206,7 +227,151 @@ PHLWINDOW CGlassDecoration::getOwner() {
     return m_window.lock();
 }
 
-void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha) {
+int CGlassDecoration::overlapShadowRange() {
+    if (!g_pGlobalState)
+        return 0;
+    const auto& config = g_pGlobalState->config;
+    return config.overlapShadowRange ? static_cast<int>(std::max<Hyprlang::INT>(0, **config.overlapShadowRange)) : 0;
+}
+
+bool CGlassDecoration::resolveOverlapShadow(PHLMONITOR monitor, std::vector<CBox>* beneath) const {
+    const auto window = m_window.lock();
+    if (!window || !monitor || !window->m_workspace)
+        return false;
+
+    try {
+        // The focused window keeps Hyprland's own shadow; a fullscreen one
+        // covers everything and casts nothing.
+        if (Desktop::focusState()->window() == window || Fullscreen::controller()->isFullscreen(window))
+            return false;
+
+        const auto optBox = WindowGeometry::computeWindowBox(window, monitor);
+        if (!optBox)
+            return false;
+        CBox shadowBox = *optBox;
+        shadowBox.expand(overlapShadowRange() * monitor->m_scale);
+
+        // Hyprland's render order: the workspace's tiled windows, then its
+        // floating ones, then the special workspace (tiled, floating), then
+        // pinned windows; within a class, the window list order.
+        auto rank = [](const PHLWINDOW& w) {
+            if (w->m_pinned)
+                return 4;
+            const bool special = w->m_workspace && w->m_workspace->m_isSpecialWorkspace;
+            return (special ? 2 : 0) + (w->m_isFloating ? 1 : 0);
+        };
+        const int   selfRank   = rank(window);
+        const auto& windows    = Desktop::windowState()->windows();
+        bool        found      = false;
+        bool        passedSelf = false;
+
+        for (const auto& other : windows) {
+            if (other == window) {
+                passedSelf = true;
+                continue;
+            }
+            if (!other || !other->m_isMapped || other->isHidden() || !other->m_workspace)
+                continue;
+            const auto ws = other->m_workspace;
+            const bool visibleHere = other->m_monitor == monitor && (ws == monitor->m_activeWorkspace || ws == monitor->m_activeSpecialWorkspace);
+            if (!visibleHere)
+                continue;
+            const int otherRank = rank(other);
+            bool      isBeneath;
+            if (otherRank != selfRank)
+                isBeneath = otherRank < selfRank;
+            else if (!window->m_isFloating && !other->m_isFloating)
+                isBeneath = false; // two tiled windows never overlap
+            else
+                isBeneath = !passedSelf; // same class: list order
+            if (!isBeneath)
+                continue;
+
+            const auto otherBox = WindowGeometry::computeWindowBox(other, monitor);
+            if (!otherBox)
+                continue;
+            CBox hit = *otherBox;
+            if (hit.intersection(shadowBox).empty())
+                continue;
+            found = true;
+            if (!beneath)
+                return true;
+            beneath->push_back(hit);
+        }
+        return found;
+    } catch (...) {}
+    return false;
+}
+
+void CGlassDecoration::drawOverlapShadow(PHLMONITOR monitor, const CBox& windowBox, const std::vector<CBox>& beneath, float alpha) {
+    const auto window = m_window.lock();
+    if (!window || !monitor)
+        return;
+    const auto& config = g_pGlobalState->config;
+    const int   range  = overlapShadowRange();
+    if (range <= 0)
+        return;
+
+    const float scale = monitor->m_scale;
+    CBox        fullBox = windowBox;
+    fullBox.expand(range * scale);
+
+    // The pane's own box is taken out as a CROSS — the box inset by the
+    // corner radius on each axis — so the four corner squares stay in: there
+    // the shader cuts out the pane's real rounded shape (it knows the window
+    // through m_renderData.currentWindow). Taking the whole rectangle out
+    // left the corner patches between arc and box without any shadow, a
+    // light square poking out of every rounded corner.
+    const float rounding      = window->rounding() * scale;
+    const float roundingPower = window->roundingPower(); // the cutout and the falloff share it; must match the pane
+    const float r             = std::min({rounding, static_cast<float>(windowBox.w / 2), static_cast<float>(windowBox.h / 2)});
+    CRegion     cross;
+    cross.add(CBox{windowBox.x + r, windowBox.y, windowBox.w - 2 * r, windowBox.h});
+    cross.add(CBox{windowBox.x, windowBox.y + r, windowBox.w, windowBox.h - 2 * r});
+
+    const uint32_t   rgba  = config.overlapShadowColor ? static_cast<uint32_t>(**config.overlapShadowColor) : 0x00000040u;
+    const CHyprColor color{((rgba >> 24) & 0xff) / 255.f, ((rgba >> 16) & 0xff) / 255.f, ((rgba >> 8) & 0xff) / 255.f, (rgba & 0xff) / 255.f};
+    const Config::CGradientValueData grad{color};
+
+    // renderRoundedShadow ignores any scissor set by the caller: it derives
+    // its own draw region from the frame damage and scissors per damage rect
+    // itself. So clip by handing it the damage already intersected with the
+    // wanted region, draw, and put the damage back. It also needs to know
+    // which window it is shading so the shader cuts the pane's own (rounded)
+    // box out instead of painting the interior; that is
+    // m_renderData.currentWindow, which a plugin pass element does not get.
+    auto&         renderData  = g_pHyprRenderer->m_renderData;
+    const CRegion savedDamage = renderData.damage;
+    const auto    savedWindow = renderData.currentWindow;
+    auto          drawIn      = [&](CRegion region, float a) {
+        region.intersect(fullBox);
+        region.subtract(cross);
+        region.intersect(savedDamage);
+        if (region.empty())
+            return;
+        renderData.damage        = region;
+        renderData.currentWindow = window;
+        g_pHyprRenderer->drawShadow(fullBox, static_cast<int>(rounding), roundingPower, static_cast<int>(range * scale), grad, a);
+    };
+
+    const bool clipToBeneath = config.overlapShadowClip && **config.overlapShadowClip;
+    if (!clipToBeneath) {
+        // The full ring around the pane.
+        drawIn(CRegion{fullBox}, alpha);
+    } else {
+        // Contact shadow: full strength wherever the pane lies over a window
+        // beneath, cut at that window's outline; the part of the pane resting
+        // on the wallpaper casts nothing.
+        CRegion region;
+        for (const auto& box : beneath)
+            region.add(box);
+        drawIn(region, alpha);
+    }
+    renderData.currentWindow = savedWindow;
+    renderData.damage        = savedDamage;
+}
+
+void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha, bool glass, bool shadow, const std::vector<CBox>& beneath) {
     auto& shaderManager = g_pGlobalState->shaderManager;
     shaderManager.initializeIfNeeded();
 
@@ -220,6 +385,24 @@ void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha) {
     const auto source = g_pHyprRenderer->m_renderData.currentFB;
     if (!source)
         return;
+
+    // The overlap shadow is drawn AFTER the pane (see the end of this
+    // function): the pane paints its padded margin, which would otherwise
+    // erase the ring.
+    auto drawShadowIfWanted = [&]() {
+        if (!shadow || beneath.empty())
+            return;
+        if (const auto box = WindowGeometry::computeWindowBox(window, monitor); box) {
+            float a = window->alphaTotalWithout(Desktop::View::WINDOW_ALPHA_ACTIVE);
+            if (const auto workspace = window->m_workspace; workspace && !window->m_pinned)
+                a *= workspace->m_alpha->value();
+            drawOverlapShadow(monitor, *box, beneath, a);
+        }
+    };
+    if (!glass) {
+        drawShadowIfWanted();
+        return;
+    }
 
     // What the glass is made from: the live frame (wallpaper plus whatever
     // windows were already drawn beneath this one) or, with x-ray, the
@@ -279,6 +462,7 @@ void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha) {
     GlassRenderer::applyGlassEffect(m_sampleFramebuffer, source,
                                      windowBox, transformBox, glassAlpha,
                                      cornerRadius, roundingPower, m_samplePaddingRatio, ctx);
+    drawShadowIfWanted();
 }
 
 eDecorationType CGlassDecoration::getDecorationType() {
@@ -308,7 +492,7 @@ void CGlassDecoration::damageEntire() {
     // surfaceBox is in logical coords; convert pixel padding to logical.
     const auto monitor = window->m_monitor.lock();
     const float scale = monitor ? monitor->m_scale : 1.0f;
-    surfaceBox.expand(GlassRenderer::SAMPLE_PADDING_PX / scale);
+    surfaceBox.expand(std::max(GlassRenderer::SAMPLE_PADDING_PX / scale, static_cast<float>(overlapShadowRange())));
 
     g_pHyprRenderer->damageBox(surfaceBox);
 }

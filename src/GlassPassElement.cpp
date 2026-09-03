@@ -3,12 +3,14 @@
 #include "Globals.hpp"
 #include "WindowGeometry.hpp"
 
+#include <algorithm>
+
 CGlassPassElement::CGlassPassElement(const SGlassPassData& data)
     : m_data(data) {}
 
 std::vector<UP<IPassElement>> CGlassPassElement::draw() {
     if (m_data.decoration.valid())
-        m_data.decoration->renderPass(g_pHyprRenderer->m_renderData.pMonitor.lock(), m_data.alpha);
+        m_data.decoration->renderPass(g_pHyprRenderer->m_renderData.pMonitor.lock(), m_data.alpha, m_data.glass, m_data.shadow, m_data.beneath);
 
     return {};
 }
@@ -29,7 +31,10 @@ std::optional<CBox> CGlassPassElement::boundingBox() {
     // Expand by our sampling padding so the render pass damages the full
     // area we read from. Without this, wallpaper outside the window box
     // but inside our padding isn't re-rendered, leaving stale content.
-    const float padding = GlassRenderer::SAMPLE_PADDING_PX / monitor->m_scale;
+    float padding = GlassRenderer::SAMPLE_PADDING_PX / monitor->m_scale;
+    // The overlap shadow reaches beyond the sampling padding.
+    if (m_data.shadow)
+        padding = std::max(padding, static_cast<float>(CGlassDecoration::overlapShadowRange()));
     box->expand(padding);
     return box;
 }

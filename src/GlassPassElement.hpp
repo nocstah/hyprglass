@@ -2,6 +2,7 @@
 
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprutils/math/Box.hpp>
+#include <vector>
 #include <hyprutils/math/Region.hpp>
 #include <hyprland/src/helpers/memory/Memory.hpp>
 
@@ -12,6 +13,9 @@ class CGlassPassElement : public IPassElement {
     struct SGlassPassData {
         WP<CGlassDecoration> decoration;
         float                alpha = 1.0f;
+        bool                 glass  = true;  // draw the glass pane
+        bool                 shadow = false; // draw the overlap shadow (see PluginConfig OVERLAP_SHADOW_*)
+        std::vector<CBox>    beneath;        // boxes of the windows the shadow may fall on (pixel coords)
     };
 
     explicit CGlassPassElement(const SGlassPassData& data);

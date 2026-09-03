@@ -132,6 +132,9 @@ plugin:hyprglass {
 | `manage_window_blur` | bool | `true` (`1` in .conf) | Automatically set the `noblur` property on glassed windows. Glass replaces Hyprland's blur; without `noblur`, Hyprland's cached-blur optimization (`blur:new_optimizations`) hides the glass on static windows. Set to `0` to manage `windowrule = noblur` yourself. |
 | `xray` | bool | `false` (`0` in .conf) | X-ray, as in Hyprland's `blur:xray`: the glass is sampled from a snapshot of the frame taken before any window is drawn (wallpaper and bottom layers only), so windows underneath never show through it, however light the blur. Per-window tags and per-layer `xray` override this either way. See [X-ray](#x-ray). |
 | `default_theme` | string | `dark` | Default theme: `dark` or `light` |
+| `overlap_shadow:range` | int | `0` | Overlap shadow: a shadow under an *unfocused* window that covers another window, in logical pixels. `0` disables. The focused window keeps Hyprland's own shadow; the falloff curve is `decoration:shadow:render_power`. |
+| `overlap_shadow:color` | color | `0x00000040` | Overlap shadow colour, RRGGBBAA |
+| `overlap_shadow:clip` | bool | `0` | `0`: the full ring around the window whenever it overlaps another. `1`: a contact shadow, painted at full strength only where the window lies over the windows beneath and cut at their outline, so the part resting on the wallpaper casts nothing. |
 | `default_preset` | string | `default` | Default preset name |
 
 ### Overridable settings
