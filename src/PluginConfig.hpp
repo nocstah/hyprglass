@@ -70,6 +70,18 @@ inline constexpr auto BLUR_FOLD           = "plugin:hyprglass:blur_fold";
 inline constexpr auto DEBUG_MODE   = "plugin:hyprglass:debug:mode";
 inline constexpr auto DEBUG_TIMERS = "plugin:hyprglass:debug:timers";
 
+// Overlap shadow: a shadow under an UNFOCUSED window that covers another
+// window, so an inactive pane reads as lifted above what it overlaps. The
+// focused window is left to Hyprland's own shadow. range 0 (default)
+// disables it; color is RRGGBBAA like tint_color; the falloff curve is
+// Hyprland's decoration:shadow:render_power. clip 0 (default): the full
+// ring around the pane whenever it overlaps any window. clip 1: a contact
+// shadow, painted at full strength only where the pane lies over the
+// windows beneath and cut at their outline.
+inline constexpr auto OVERLAP_SHADOW_RANGE = "plugin:hyprglass:overlap_shadow:range";
+inline constexpr auto OVERLAP_SHADOW_COLOR = "plugin:hyprglass:overlap_shadow:color";
+inline constexpr auto OVERLAP_SHADOW_CLIP  = "plugin:hyprglass:overlap_shadow:clip";
+
 // Preset keyword, registered as unscoped because Hyprlang does not dispatch
 // scoped keyword handlers inside the plugin special category.
 inline constexpr auto PRESET_KEYWORD = "preset";
@@ -300,6 +312,12 @@ struct SPluginConfig {
     // Derives a smaller blur pass count from the requested radius (GlassRenderer::
     // foldBlurPasses) instead of always running blur_iterations passes at full radius.
     Hyprlang::INT* const* blurFold = nullptr;
+    // A shadow under an unfocused window that covers another one. range is in
+    // logical pixels (0 = off), color is RRGGBBAA, clip cuts it at the outline
+    // of the windows beneath.
+    Hyprlang::INT* const* overlapShadowRange = nullptr;
+    Hyprlang::INT* const* overlapShadowColor = nullptr;
+    Hyprlang::INT* const* overlapShadowClip  = nullptr;
     StringConfigPtr      defaultTheme;
     StringConfigPtr      defaultPreset;
 

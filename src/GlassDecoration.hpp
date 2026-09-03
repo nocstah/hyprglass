@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <vector>
+
 #include "GlassRenderer.hpp"
 #include "PluginConfig.hpp"
 
@@ -25,7 +28,7 @@ class CGlassDecoration : public IHyprWindowDecoration {
     [[nodiscard]] std::string                getDisplayName() override;
 
     [[nodiscard]] PHLWINDOW getOwner();
-    void                    renderPass(PHLMONITOR monitor, const float& alpha);
+    void                    renderPass(PHLMONITOR monitor, const float& alpha, bool glass, bool shadow, const std::vector<CBox>& beneath);
     void                    onFullscreenStateChanged();
 
     // Content below committed damage in our sample region — resample next frame.
@@ -39,6 +42,9 @@ class CGlassDecoration : public IHyprWindowDecoration {
     // (draw()-time) and from renderPass() itself — safe to call twice, no GL
     // calls. transformBox is monitor-local physical pixels (see callers).
     [[nodiscard]] bool wantsBackgroundResample(PHLMONITOR monitor, const CBox& transformBox) const;
+
+    // Configured overlap shadow range in logical pixels (0 = off).
+    [[nodiscard]] static int overlapShadowRange();
 
     // Owner test without the shared_ptr copy getOwner() hands out.
     [[nodiscard]] bool  ownsWindow(const PHLWINDOW& window) const { return m_window == window; }
@@ -95,7 +101,7 @@ class CGlassDecoration : public IHyprWindowDecoration {
     // many duplicate copies happened to render, not on the scene.
     uint64_t m_lastFoldedFrameSerial = 0;
 
-    void               queueGlassPass(float alpha);
+    void               queueGlassPass(float alpha, bool glass, bool shadow, const std::vector<CBox>& beneath);
     [[nodiscard]] bool isCurrentGlassPass(uint64_t serial, uint32_t index) const {
         return serial == 0 || (serial == m_glassFrameSerial && index == m_glassQueueIndex);
     }
@@ -115,6 +121,18 @@ class CGlassDecoration : public IHyprWindowDecoration {
     };
 
     [[nodiscard]] EEnabledResolution resolveEnabled() const;
+    // Whether this window is unfocused, not fullscreen, and has at least one
+    // window drawn beneath it that its shadow box touches; fills `beneath`
+    // (monitor-local pixel coords) with those windows' boxes.
+    [[nodiscard]] bool               resolveOverlapShadow(PHLMONITOR monitor, std::vector<CBox>* beneath) const;
+    void                             drawOverlapShadow(PHLMONITOR monitor, const CBox& windowBox, const std::vector<CBox>& beneath, float alpha);
+    // Last frame's overlap-shadow state, to damage the whole ring when it
+    // changes (focus gained/lost, a window beneath moved): the frame damage
+    // that triggers such a change (the pane's box, its border) does not
+    // cover the ring, so without this only the damaged slice of the ring is
+    // ever painted and hard-edged partial shadows are left behind.
+    bool                             m_lastShadow = false;
+    std::vector<std::array<int, 4>>  m_lastShadowClip;
     [[nodiscard]] bool               resolveThemeIsDark() const;
     [[nodiscard]] std::string        resolvePresetName() const;
 

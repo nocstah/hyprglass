@@ -5,6 +5,7 @@
 #include "PluginConfig.hpp"
 #include "WindowGeometry.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 CGlassPassElement::CGlassPassElement(const SGlassPassData& data)
@@ -26,7 +27,7 @@ std::vector<UP<IPassElement>> CGlassPassElement::draw() {
     if (!m_data.decoration->isCurrentGlassPass(m_data.frameSerial, m_data.queueIndex))
         return {};
 
-    m_data.decoration->renderPass(g_pHyprRenderer->m_renderData.pMonitor.lock(), m_data.alpha);
+    m_data.decoration->renderPass(g_pHyprRenderer->m_renderData.pMonitor.lock(), m_data.alpha, m_data.glass, m_data.shadow, m_data.beneath);
 
     return {};
 }
@@ -48,7 +49,11 @@ std::optional<CBox> CGlassPassElement::paddedLogicalBox() const {
     // contract; computeWindowBox() returns physical pixels for renderPass()'s
     // own use, so convert back and expand by our sampling padding here.
     const float scale = monitor->m_scale > 0.0f ? monitor->m_scale : 1.0f;
-    box->scale(1.0 / scale).expand(GlassRenderer::SAMPLE_PADDING_PX / scale).noNegativeSize().round();
+    float       padding = GlassRenderer::SAMPLE_PADDING_PX / scale;
+    // The overlap shadow reaches beyond the sampling padding.
+    if (m_data.shadow)
+        padding = std::max(padding, static_cast<float>(CGlassDecoration::overlapShadowRange()));
+    box->scale(1.0 / scale).expand(padding).noNegativeSize().round();
     if (!std::isfinite(box->x) || !std::isfinite(box->y) || !std::isfinite(box->w) || !std::isfinite(box->h) || box->w <= 0.0 || box->h <= 0.0)
         return std::nullopt;
 
@@ -64,6 +69,10 @@ bool CGlassPassElement::needsLiveBlur() {
     // hints, isolating their render-pass cost (full re-render) from the
     // pipeline's own GL cost.
     if (currentDebugMode() == EDebugMode::GL_WORK_ONLY)
+        return false;
+
+    // A shadow-only element samples nothing, so it needs no live blur.
+    if (!m_data.glass)
         return false;
 
     // Must agree with boundingBox() on whether a box exists: Hyprland's

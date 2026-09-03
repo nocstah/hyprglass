@@ -58,6 +58,9 @@ void registerConfig(HANDLE handle) {
     addConfigValue<Config::Values::Int>(handle, ConfigKeys::MANAGE_WINDOW_BLUR, Config::INTEGER{1});
     addConfigValue<Config::Values::Int>(handle, ConfigKeys::SKIP_OPAQUE_WINDOWS, Config::INTEGER{1});
     addConfigValue<Config::Values::Int>(handle, ConfigKeys::BLUR_FOLD, Config::INTEGER{1});
+    addConfigValue<Config::Values::Int>(handle, ConfigKeys::OVERLAP_SHADOW_RANGE, Config::INTEGER{0});
+    addConfigValue<Config::Values::Int>(handle, ConfigKeys::OVERLAP_SHADOW_COLOR, Config::INTEGER{0x00000040});
+    addConfigValue<Config::Values::Int>(handle, ConfigKeys::OVERLAP_SHADOW_CLIP, Config::INTEGER{0});
     addConfigValue<Config::Values::String>(handle, ConfigKeys::DEFAULT_THEME, Config::STRING{"dark"});
     addConfigValue<Config::Values::String>(handle, ConfigKeys::DEFAULT_PRESET, Config::STRING{"default"});
 
@@ -251,6 +254,9 @@ void initConfigPointers(HANDLE handle, SPluginConfig& config) {
     config.manageWindowBlur  = getStaticPtr<Hyprlang::INT>(handle, ConfigKeys::MANAGE_WINDOW_BLUR);
     config.skipOpaqueWindows = getStaticPtr<Hyprlang::INT>(handle, ConfigKeys::SKIP_OPAQUE_WINDOWS);
     config.blurFold          = getStaticPtr<Hyprlang::INT>(handle, ConfigKeys::BLUR_FOLD);
+    config.overlapShadowRange = getStaticPtr<Hyprlang::INT>(handle, ConfigKeys::OVERLAP_SHADOW_RANGE);
+    config.overlapShadowColor = getStaticPtr<Hyprlang::INT>(handle, ConfigKeys::OVERLAP_SHADOW_COLOR);
+    config.overlapShadowClip  = getStaticPtr<Hyprlang::INT>(handle, ConfigKeys::OVERLAP_SHADOW_CLIP);
     config.defaultTheme  = getStringPtr(handle, ConfigKeys::DEFAULT_THEME);
     config.defaultPreset = getStringPtr(handle, ConfigKeys::DEFAULT_PRESET);
 

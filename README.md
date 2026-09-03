@@ -133,6 +133,9 @@ plugin:hyprglass {
 | `skip_opaque_windows` | bool | `true` (`1` in .conf) | Skip glass under an opaque window — it would be invisible anyway, so skipping it saves GPU. Set to `0` to force glass everywhere. Windows using `self_sample` are never skipped, since their glass shows their own content. |
 | `blur_fold` | bool | `true` (`1` in .conf) | Fewer blur passes with an identical look. Set to `0` to always run `blur_iterations` passes at the configured radius. |
 | `default_theme` | string | `dark` | Default theme: `dark` or `light` |
+| `overlap_shadow:range` | int | `0` | A shadow under an *unfocused* window that covers another one, in logical pixels. `0` is off; the focused window keeps Hyprland's own shadow. |
+| `overlap_shadow:color` | color | `0x00000040` | Overlap shadow colour, RRGGBBAA |
+| `overlap_shadow:clip` | bool | `0` | `0`: the full ring around the window. `1`: a contact shadow, only where the window lies over the windows beneath. |
 | `default_preset` | string | `default` | Default preset name |
 
 ### Overridable settings
