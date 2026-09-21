@@ -4,6 +4,7 @@
 #include "Diagnostics.hpp"
 #include "GlassPassElement.hpp"
 #include "GlassRenderer.hpp"
+#include "GlassSnapshotElement.hpp"
 #include "Globals.hpp"
 #include "Hash.hpp"
 #include "RenderGuards.hpp"
@@ -137,6 +138,30 @@ bool CGlassDecoration::resolveThemeIsDark() const {
     return true;
 }
 
+bool CGlassDecoration::resolveXray() const {
+    try {
+        const auto window = m_window.lock();
+        if (window && window->m_ruleApplicator) {
+            const auto& tags = window->m_ruleApplicator->m_tagKeeper;
+            // As with Hyprland's `xray off` window rule, off wins over the global.
+            if (tags.isTagged(std::string(TAG_NOXRAY)))
+                return false;
+            if (tags.isTagged(std::string(TAG_XRAY)))
+                return true;
+        }
+    } catch (...) {}
+
+    const auto& config = g_pGlobalState->config;
+    return config.xray && **config.xray;
+}
+
+SP<Render::IFramebuffer> CGlassDecoration::xraySnapshot(PHLMONITOR monitor) const {
+    if (!resolveXray())
+        return nullptr;
+
+    return xraySnapshotFor(monitor, g_pHyprRenderer->m_renderData.currentFB);
+}
+
 std::string CGlassDecoration::resolvePresetName() const {
     try {
         const auto window = m_window.lock();
@@ -242,6 +267,10 @@ void CGlassDecoration::draw(PHLMONITOR monitor, float const& alpha) {
     if (RenderGuards::isForeignRender())
         return;
 
+    // X-ray: ask for next frame's snapshot while we still sample this one's.
+    if (resolveXray())
+        requestXraySnapshot(monitor);
+
     queueGlassPass(alpha);
 
     // A slide translates the scene under us without any geometry change, and
@@ -294,6 +323,9 @@ bool CGlassDecoration::wantsBackgroundResample(PHLMONITOR monitor, const CBox& t
 
     if (m_backgroundDirty)
         return true; // markBackgroundDirty() mark not yet escalated into a scene-generation bump
+
+    if (m_cachedFromSnapshot != static_cast<bool>(xraySnapshot(monitor)))
+        return true; // x-ray toggled, or its snapshot just became usable
 
     const auto window = m_window.lock();
     if (!window)
@@ -358,6 +390,10 @@ void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha) {
     if (!source)
         return;
 
+    // Until the snapshot is filled in, x-ray falls back to the live frame.
+    const auto snapshot     = xraySnapshot(monitor);
+    const auto sampleSource = snapshot ? snapshot : source;
+
     auto optBox = WindowGeometry::computeWindowBox(window, monitor);
     if (!optBox)
         return;
@@ -416,13 +452,15 @@ void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha) {
         // logical-space padding boundingBox() uses.
         CBox paddedBox = transformBox;
         paddedBox.expand(GlassRenderer::SAMPLE_PADDING_PX);
-        const bool covered = CRegion(paddedBox).subtract(g_pHyprRenderer->m_renderData.damage).empty();
+        // The snapshot holds the background everywhere, so x-ray needs no
+        // damage under the window to sample cleanly.
+        const bool covered = snapshot || CRegion(paddedBox).subtract(g_pHyprRenderer->m_renderData.damage).empty();
 
         if (covered) {
             float blurStrength   = resolvePresetFloat(ctx, &SPresetValues::blurStrength, &SOverridableConfig::blurStrength);
             int downscale        = blurStrength >= GlassRenderer::BLUR_DOWNSCALE_THRESHOLD ? GlassRenderer::BLUR_DOWNSCALE_MAX : 1;
 
-            GlassRenderer::sampleBackground(m_sampleFramebuffer, source, transformBox, m_samplePaddingRatio, downscale);
+            GlassRenderer::sampleBackground(m_sampleFramebuffer, sampleSource, transformBox, m_samplePaddingRatio, downscale);
 
             // Only here, on a real (non-cached) sample: blending onto a cache-hit
             // frame would double-composite our own content over an already-blurred FBO.
@@ -442,6 +480,7 @@ void CGlassDecoration::renderPass(PHLMONITOR monitor, const float& alpha) {
             GlassRenderer::blurBackground(m_sampleFramebuffer, blurRadius, blurIterations, source);
 
             m_hasCachedSample       = true;
+            m_cachedFromSnapshot    = static_cast<bool>(snapshot);
             m_lastSceneGeneration   = g_pGlobalState->getSceneGeneration(monitor);
             m_lastGenerationMonitor = monitorId;
             m_backgroundDirty       = false;
